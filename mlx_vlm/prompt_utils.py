@@ -43,6 +43,9 @@ MODEL_CONFIG = {
     "qwen3_vl_moe": MessageFormat.LIST_WITH_IMAGE_FIRST,
     "qwen3_5": MessageFormat.LIST_WITH_IMAGE_FIRST,
     "qwen3_5_moe": MessageFormat.LIST_WITH_IMAGE_FIRST,
+    "minicpmo": MessageFormat.LIST_WITH_IMAGE_FIRST,
+    "minicpm-o": MessageFormat.LIST_WITH_IMAGE_FIRST,
+    "minicpm_o": MessageFormat.LIST_WITH_IMAGE_FIRST,
     "mistral3": MessageFormat.LIST_WITH_IMAGE_FIRST,
     "glm4v": MessageFormat.LIST_WITH_IMAGE_FIRST,
     "glm4v_moe": MessageFormat.LIST_WITH_IMAGE_FIRST,
@@ -204,7 +207,7 @@ class MessageFormatter:
             "qwen3_5",
             "qwen3_5_moe",
         ] and kwargs.get("video"):
-            return self._format_video_message(prompt, kwargs)
+            return self._format_video_message(prompt, **kwargs)
 
         # Route to appropriate formatter
         formatter_map = {
@@ -379,11 +382,20 @@ class MessageFormatter:
         **kwargs,
     ) -> Dict[str, Any]:
         """Format a video message with text."""
+        video_path = kwargs.get("video")
+        if not video_path:
+            # Graceful fallback when no explicit video path is provided.
+            return {
+                "role": role,
+                "content": [
+                    MessageBuilder.text_message(prompt),
+                ],
+            }
         return {
             "role": role,
             "content": [
                 MessageBuilder.video_message(
-                    kwargs["video"],
+                    video_path,
                     kwargs.get("max_pixels", 224 * 224),
                     kwargs.get("fps", 1),
                 ),

@@ -35,9 +35,9 @@ class Thinker(nn.Module):
         super().__init__()
         self.config = config
 
-        self.vision_tower = VisionModel(config.vision_config)
+        self.vision_tower = VisionModel(config.vision_config) if config.init_vision else None
 
-        self.audio_tower = AudioModel(config.audio_config)
+        self.audio_tower = AudioModel(config.audio_config) if config.init_audio else None
 
         self.language_model = LanguageModel(config.text_config, config)
 
@@ -67,6 +67,8 @@ class Thinker(nn.Module):
                 else None
             )
         )
+        if self.audio_tower is None:
+            raise ValueError("Audio tower is not initialized for this model configuration.")
         audio_outputs = self.audio_tower(
             input_features,
             feature_lens=feature_lens,
@@ -175,6 +177,10 @@ class Thinker(nn.Module):
             inputs_embeds = masked_scatter(inputs_embeds, audio_mask, audio_features)
 
         if pixel_values is not None:
+            if self.vision_tower is None:
+                raise ValueError(
+                    "Vision tower is not initialized for this model configuration."
+                )
             dtype = self.vision_tower.patch_embed.proj.weight.dtype
             pixel_values = pixel_values.astype(dtype)
             vision_output = self.vision_tower(pixel_values, image_grid_thw)
@@ -194,6 +200,10 @@ class Thinker(nn.Module):
             visual_embeds_multiscale = image_embeds_multiscale
 
         if pixel_values_videos is not None:
+            if self.vision_tower is None:
+                raise ValueError(
+                    "Vision tower is not initialized for this model configuration."
+                )
             dtype = self.vision_tower.patch_embed.proj.weight.dtype
             pixel_values_videos = pixel_values_videos.astype(dtype)
             vision_output = self.vision_tower(pixel_values_videos, video_grid_thw)
@@ -342,6 +352,24 @@ class Thinker(nn.Module):
     def sanitize(self, weights):
         sanitized_weights = {}
         for key, value in weights.items():
+            # MiniCPM-o style checkpoints may use top-level module names.
+            # Remap supported modules into thinker namespace and skip unsupported ones.
+            if key.startswith("language_model."):
+                key = f"thinker.{key}"
+            elif key.startswith("vision_tower."):
+                # MiniCPM-o vision architecture differs from qwen3_omni_moe.
+                # Skip unmatched vision parameters for compatibility with text usage.
+                continue
+            elif key.startswith("audio_encoder."):
+                # MiniCPM-o audio encoder architecture differs from qwen3_omni_moe.
+                # Skip unmatched audio parameters for compatibility with text/vision usage.
+                continue
+            elif key.startswith("resampler.") or key.startswith("tts."):
+                # Not present in qwen3_omni_moe thinker module.
+                continue
+            elif key.startswith("audio_projection_layer."):
+                continue
+
             if "thinker" in key:
                 if "thinker.model" in key:
                     key = key.replace("thinker.model", "thinker.language_model.model")

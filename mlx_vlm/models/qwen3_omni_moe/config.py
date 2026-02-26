@@ -161,11 +161,53 @@ class ThinkerConfig(BaseModelConfig):
     user_token_id: int = 872
     position_id_per_seconds: int = 13
     seconds_per_chunk: int = 2
+    init_vision: bool = True
+    init_audio: bool = True
 
     @classmethod
     def from_dict(cls, params):
         params = dict(params)
-        text_config = TextConfig.from_dict(params.pop("text_config", {}))
+        text_params = params.pop("text_config", None)
+        if not text_params:
+            # Support flat MiniCPM-o style config where text fields are at top level
+            text_keys = {
+                "num_hidden_layers",
+                "hidden_size",
+                "intermediate_size",
+                "num_attention_heads",
+                "num_experts",
+                "num_experts_per_tok",
+                "decoder_sparse_step",
+                "mlp_only_layers",
+                "moe_intermediate_size",
+                "rms_norm_eps",
+                "vocab_size",
+                "num_key_value_heads",
+                "head_dim",
+                "rope_theta",
+                "max_position_embeddings",
+                "tie_word_embeddings",
+                "attention_bias",
+                "attention_dropout",
+                "hidden_act",
+                "use_cache",
+                "use_sliding_window",
+                "sliding_window",
+                "initializer_range",
+                "rope_scaling",
+            }
+            text_params = {k: v for k, v in params.items() if k in text_keys}
+
+            # Backfill MoE-specific fields for dense MiniCPM-style configs
+            text_params.setdefault("num_experts", 0)
+            text_params.setdefault("num_experts_per_tok", 1)
+            text_params.setdefault("decoder_sparse_step", 1)
+            text_params.setdefault("mlp_only_layers", [])
+            text_params.setdefault(
+                "moe_intermediate_size", text_params.get("intermediate_size", 11008)
+            )
+
+        text_config = TextConfig.from_dict(text_params)
         vision_config = VisionConfig.from_dict(params.pop("vision_config", {}))
         audio_config = AudioConfig.from_dict(params.pop("audio_config", {}))
 
@@ -212,7 +254,10 @@ class TalkerConfig(BaseModelConfig):
     @classmethod
     def from_dict(cls, params):
         params = dict(params)
-        text_config = TextConfig.from_dict(params.pop("text_config", {}))
+        text_params = params.pop("text_config", None)
+        if not text_params:
+            text_params = {}
+        text_config = TextConfig.from_dict(text_params)
         code_predictor_config = CodePredictorConfig.from_dict(
             params.pop("code_predictor_config", {})
         )
@@ -248,6 +293,84 @@ class ModelConfig(BaseModelConfig):
     @classmethod
     def from_dict(cls, params):
         params = dict(params)
+        # Handle native Qwen3-Omni nested configs and MiniCPM-o flat configs.
+        if "thinker_config" not in params:
+            text_keys = {
+                "num_hidden_layers",
+                "hidden_size",
+                "intermediate_size",
+                "num_attention_heads",
+                "num_experts",
+                "num_experts_per_tok",
+                "decoder_sparse_step",
+                "mlp_only_layers",
+                "moe_intermediate_size",
+                "rms_norm_eps",
+                "vocab_size",
+                "num_key_value_heads",
+                "head_dim",
+                "rope_theta",
+                "max_position_embeddings",
+                "tie_word_embeddings",
+                "attention_bias",
+                "attention_dropout",
+                "hidden_act",
+                "use_cache",
+                "use_sliding_window",
+                "sliding_window",
+                "initializer_range",
+                "rope_scaling",
+            }
+            flat_text = {k: v for k, v in params.items() if k in text_keys}
+            flat_text.setdefault("num_experts", 0)
+            flat_text.setdefault("num_experts_per_tok", 1)
+            flat_text.setdefault("decoder_sparse_step", 1)
+            flat_text.setdefault("mlp_only_layers", [])
+            flat_text.setdefault(
+                "moe_intermediate_size", flat_text.get("intermediate_size", 11008)
+            )
+
+            raw_vision = dict(params.get("vision_config", {}))
+            if raw_vision.get("model_type") == "siglip_vision_model":
+                raw_vision = {
+                    **raw_vision,
+                    "model_type": "qwen3_omni_moe_vision_encoder",
+                    "depth": raw_vision.get("num_hidden_layers", 27),
+                    "num_heads": raw_vision.get("num_attention_heads", 16),
+                    "in_channels": raw_vision.get("num_channels", 3),
+                }
+
+            params["thinker_config"] = {
+                "text_config": flat_text,
+                "vision_config": raw_vision,
+                "audio_config": params.get("audio_config", {}),
+                "image_token_id": params.get("image_token_id", 151655),
+                "video_token_id": params.get("video_token_id", 151656),
+                "audio_token_id": params.get("audio_token_id", 151675),
+                "audio_start_token_id": params.get("audio_start_token_id", 151669),
+                "audio_end_token_id": params.get("audio_end_token_id", 151670),
+                "vision_start_token_id": params.get("vision_start_token_id", 151652),
+                "vision_end_token_id": params.get("vision_end_token_id", 151653),
+                "user_token_id": params.get("user_token_id", 872),
+                "dtype": params.get("dtype", "bfloat16"),
+                "init_vision": False,
+                "init_audio": False,
+            }
+
+        if "talker_config" not in params:
+            params["talker_config"] = {
+                "text_config": params["thinker_config"].get("text_config", {}),
+                "code_predictor_config": params.get("code_predictor_config", {}),
+            }
+
+        if "code2wav_config" not in params:
+            params["code2wav_config"] = params.get("code2wav_config", {})
+
+        # MiniCPM-o repositories often provide `tts_config` instead of Qwen3 talker/code2wav.
+        # Disable talker by default for compatibility with text generation paths.
+        if "tts_config" in params and "enable_audio_output" not in params:
+            params["enable_audio_output"] = False
+
         thinker_config = ThinkerConfig.from_dict(params.pop("thinker_config", {}))
         talker_config = TalkerConfig.from_dict(params.pop("talker_config", {}))
         code2wav_config = Code2WavConfig.from_dict(params.pop("code2wav_config", {}))
